@@ -5,7 +5,7 @@ from rest_framework.views import APIView
 
 from .forms import CodeSubmissionForm
 from .models import CodeSubmission
-from .serializers import CodeSubmissionSerializer
+from .serializers import CodeSubmissionSerializer, ReviewRequestSerializer
 from .services import generate_review
 
 
