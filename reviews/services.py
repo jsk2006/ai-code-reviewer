@@ -2,7 +2,9 @@ import os
 
 from dotenv import load_dotenv
 from google import genai
+from google.genai import types
 
+from .schemas import ReviewSchema
 from .models import CodeSubmission, AIReview
 
 load_dotenv()
@@ -12,29 +14,46 @@ client = genai.Client(
 )
 
 def generate_review(title, programming_language, code_content):
+    try:
+        prompt=f"""
+        You are an expert and experienced software engineer.
 
-    response = client.models.generate_content(
-    model="gemini-2.5-flash",
-    contents=f"""
-    You are an expert software engineer.
+        Review the following {programming_language} code and give constructive feedback.
+        The code can be a competetive coding problem solution or a industry/ production level code or a personal project code etc.
+        Examine and figure out what the code is trying to acheive and analyze according to that.
+        Don't give sugar coated feedback, be honest and straightforward.
 
-    Review the following {programming_language} code.
+        Title: {title}
 
-    Title: {title}
+        Code:
+        {code_content}
 
-    Code:
-    {code_content}
+        Give constructive feedback in simple bullet points. Mention:
+        1. Correctness- logic errors, edge cases, etc.
+        2. Readability- code readability, comments, etc.
+        3. Efficiency- time complexity, space complexity, memory usage, etc.
+        4. Best practices- coding conventions, best practices, etc.
+        5. Possible improvements- state properly what the issue is and how to improve it.
+        6. If it is a personal project then how to improve/ what all features to add for beginner, intermediate or advanced level.
+        7. If it is industry/ production level code- then focus on scalability if applicable on the code and what all best practices to follow.
+        8. If it is a competetive coding problem solution- then focus on the logic- bruteforce and optimized solutions, time and space complexity, etc.
+        9. Overall- give a overall score and feedback on the code.
 
-    Give constructive feedback in simple bullet points. Mehtion:
-    1. Correctness
-    2. Readability
-    3. Efficiency
-    4. Best practices
-    5. Possible improvements
-    """
-    )
+                """
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=ReviewSchema,
+            ),
+        )
 
-    review_text = response.text
+        review = ReviewSchema.model_validate_json(response.text)
+        review_text = review.summary
+    except Exception as e:
+        print(e)
+        raise RuntimeError("Failed to generate AI review") from e
 
     submission = CodeSubmission.objects.create(
         title=title,
@@ -44,7 +63,10 @@ def generate_review(title, programming_language, code_content):
 
     AIReview.objects.create(
         submission=submission,
-        review_text=review_text
+        overall_score=review.overall_score,
+        summary=review.summary,
+        structured_review=review.model_dump()
     )
 
-    return review_text
+    return review 
+

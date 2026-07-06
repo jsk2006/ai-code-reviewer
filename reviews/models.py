@@ -17,11 +17,13 @@ class AIReview(models.Model):
         related_name="reviews"
     )
 
-    review_text = models.TextField()
+    overall_score = models.IntegerField()
 
-    created_at = models.DateTimeField(
-        auto_now_add=True
-    )
+    summary = models.TextField()
+
+    structured_review = models.JSONField()
+
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"Review for {self.submission.title}"

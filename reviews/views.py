@@ -56,7 +56,6 @@ class ReviewAPIView(APIView):
     def post(self, request):
 
         serializer = ReviewRequestSerializer(data=request.data)
-
         serializer.is_valid(raise_exception=True)
 
         review = generate_review(
@@ -65,6 +64,4 @@ class ReviewAPIView(APIView):
             code_content=serializer.validated_data["code_content"]
         )
 
-        return Response({
-            "review": review
-        })
+        return Response(review.model_dump())
