@@ -1,0 +1,253 @@
+{
+  "info": {
+    "name": "AI Code Reviewer",
+    "description": "Import this into Postman, then run requests top-to-bottom inside each folder: Auth first, then Submissions. Log In automatically saves your access token into the {{access_token}} variable, and Create Submission automatically saves the new submission's id into {{submission_id}} — every other request reuses those, so you never have to copy/paste a token by hand.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{access_token}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000", "type": "string" },
+    { "key": "access_token", "value": "", "type": "string" },
+    { "key": "refresh_token", "value": "", "type": "string" },
+    { "key": "submission_id", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "1. Auth",
+      "description": "Run these two in order first. Everything else in this collection needs access_token, which Log In fills in for you.",
+      "item": [
+        {
+          "name": "Sign Up",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "username", "value": "demo", "type": "text" },
+                { "key": "email", "value": "demo@example.com", "type": "text" },
+                { "key": "password", "value": "demo-strong-pass-123", "type": "text" }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/signup/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "signup", ""]
+            },
+            "description": "Creates a user. Expect 201 with your id/username/email (never the password) back. Change the username/password fields here if 'demo' is already taken."
+          },
+          "response": []
+        },
+        {
+          "name": "Log In",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.test('Login succeeded (200)', function () { pm.response.to.have.status(200); });",
+                  "if (data.access) {",
+                  "    pm.collectionVariables.set('access_token', data.access);",
+                  "    pm.collectionVariables.set('refresh_token', data.refresh);",
+                  "    console.log('Saved access_token for use in every other request.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "username", "value": "demo", "type": "text" },
+                { "key": "password", "value": "demo-strong-pass-123", "type": "text" }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login", ""]
+            },
+            "description": "Returns access + refresh tokens. The Tests script (see the 'Tests' tab) automatically saves both into collection variables — open the eye icon (top right) afterward and you'll see access_token populated."
+          },
+          "response": []
+        },
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (data.access) { pm.collectionVariables.set('access_token', data.access); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [{ "key": "refresh", "value": "{{refresh_token}}", "type": "text" }]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/refresh/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "refresh", ""]
+            },
+            "description": "Access tokens expire after 30 minutes. Run this instead of logging in again once that happens — it trades your refresh token for a new access token."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Submissions",
+      "description": "All of these send Authorization: Bearer {{access_token}} automatically (inherited from the collection's Auth tab) — that's why you don't see a token typed anywhere in these requests.",
+      "item": [
+        {
+          "name": "Create Submission (pasted code)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "pm.test('Created (201)', function () { pm.response.to.have.status(201); });",
+                  "if (data.id) {",
+                  "    pm.collectionVariables.set('submission_id', data.id);",
+                  "    console.log('Saved submission_id = ' + data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "category", "value": "dsa", "type": "text", "description": "dsa | production | learning" },
+                {
+                  "key": "code_content",
+                  "value": "def two_sum(nums, target):\n    seen = {}\n    for i, n in enumerate(nums):\n        if target - n in seen:\n            return [seen[target-n], i]\n        seen[n] = i",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/submissions/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "submissions", ""]
+            },
+            "description": "Expect 201 with status: pending, instantly. The Tests script saves the new id into {{submission_id}} so 'Get Submission Status' below already knows which one to check."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Submission (file upload)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "category", "value": "learning", "type": "text" },
+                { "key": "files", "type": "file", "src": [] }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/submissions/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "submissions", ""]
+            },
+            "description": "The 'files' row is set to type File but has no file chosen yet — click 'Select Files' on that row in the Body tab and pick any real .py/.js/.java/etc. file from your computer before sending."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Submission Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/submissions/{{submission_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "submissions", "{{submission_id}}", ""]
+            },
+            "description": "Uses whichever submission_id was last saved by a Create request. Send this once right after creating (often still 'processing'), then send it again a few seconds later — status should flip to 'done' with a review attached."
+          },
+          "response": []
+        },
+        {
+          "name": "List History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/submissions/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "submissions", ""]
+            },
+            "description": "Paginated list of everything you've submitted (10 per page). Only your own submissions ever show up here."
+          },
+          "response": []
+        },
+        {
+          "name": "Validation Error (empty submission)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [{ "key": "category", "value": "learning", "type": "text" }]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/submissions/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "submissions", ""]
+            },
+            "description": "No code_content and no file — expect 400, since there's nothing to review."
+          },
+          "response": []
+        },
+        {
+          "name": "Rejected File Type",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "category", "value": "production", "type": "text" },
+                { "key": "files", "type": "file", "src": [] }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/submissions/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "submissions", ""]
+            },
+            "description": "Pick any non-code file (a .exe, .png, .zip — anything not in ALLOWED_CODE_FILE_EXTENSIONS) under 'Select Files' before sending. Expect 400 naming the rejected extension."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

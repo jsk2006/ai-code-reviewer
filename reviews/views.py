@@ -1,67 +1,82 @@
-from django.shortcuts import get_object_or_404, redirect, render
-from rest_framework.generics import ListCreateAPIView, RetrieveAPIView, UpdateAPIView, DestroyAPIView
+from django.db import transaction
+from rest_framework import status
+from rest_framework.generics import CreateAPIView, ListCreateAPIView, RetrieveAPIView
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework.views import APIView
 
-from .forms import CodeSubmissionForm
-from .models import CodeSubmission
-from .serializers import CodeSubmissionSerializer, ReviewRequestSerializer
-from .services import generate_review
-
-
-def home(request):
-    if request.method == 'POST':
-        form = CodeSubmissionForm(request.POST)
-        if form.is_valid():
-            form.save()
-            return redirect('home')
-    else:
-        form = CodeSubmissionForm()
-
-    submissions = CodeSubmission.objects.all().order_by('-created_at')
-
-    return render(request, 'reviews/home.html', {
-        'form': form,
-        'submissions': submissions,
-    })
+from .models import Submission
+from .serializers import SignupSerializer, SubmissionCreateSerializer, SubmissionSerializer
+from .tasks import process_submission
+from .throttles import SubmissionRateThrottle
 
 
-def submission_detail(request, id):
-    submission = get_object_or_404(CodeSubmission, pk=id)
+class SignupView(CreateAPIView):
+    """
+    POST username/email/password -> creates a User. Doesn't return tokens itself;
+    the client is expected to call /api/auth/login/ (TokenObtainPairView) right
+    after, same as any "register then log in" flow. Keeping registration and
+    login as separate endpoints (rather than auto-logging-in on signup) keeps
+    each view doing one thing, and matches how simplejwt's views work.
+    """
 
-    return render(request, 'reviews/submission_detail.html', {
-        'submission': submission,
-    })
-
-
-class CodeSubmissionListCreateAPIView(ListCreateAPIView):
-    queryset = CodeSubmission.objects.all().order_by('-created_at')
-    serializer_class = CodeSubmissionSerializer
-
-
-class CodeSubmissionDetailAPIView(RetrieveAPIView):
-    queryset = CodeSubmission.objects.all()
-    serializer_class = CodeSubmissionSerializer
-
-class CodeSubmissionUpdateAPIView(UpdateAPIView):
-    queryset = CodeSubmission.objects.all()
-    serializer_class = CodeSubmissionSerializer
-
-class CodeSubmissionDeleteAPIView(DestroyAPIView):
-    queryset = CodeSubmission.objects.all()
-    serializer_class = CodeSubmissionSerializer
+    serializer_class = SignupSerializer
+    # Global DEFAULT_PERMISSION_CLASSES is IsAuthenticated (see settings/base.py) —
+    # signup is the one endpoint that must be reachable by anonymous clients.
+    permission_classes = [AllowAny]
 
 
-class ReviewAPIView(APIView):
-    def post(self, request):
+class SubmissionListCreateAPIView(ListCreateAPIView):
+    """
+    POST  -> create a submission (Step 4): validates input, saves it with
+             status="pending", and enqueues a Celery job. Returns 201 immediately
+             — it does NOT wait for the LLM. That's the whole point of doing this
+             asynchronously: the client gets an id to poll, not a slow response.
+    GET   -> history (Step 7): paginated list of the current user's past
+             submissions, most recent first (see Submission.Meta.ordering),
+             each with its review nested once done.
+    """
 
-        serializer = ReviewRequestSerializer(data=request.data)
+    def get_queryset(self):
+        return Submission.objects.filter(user=self.request.user).prefetch_related('files', 'review')
+
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return SubmissionCreateSerializer
+        return SubmissionSerializer
+
+    def get_throttles(self):
+        # Only throttle creation (Step 8) — browsing your own history (GET)
+        # shouldn't burn the same per-day budget as kicking off LLM-costing reviews.
+        if self.request.method == 'POST':
+            return [SubmissionRateThrottle()]
+        return []
+
+    def perform_create(self, serializer):
+        submission = serializer.save()
+        # transaction.on_commit defers the .delay() call until after the DB
+        # transaction actually commits. Without this, a Celery worker could pick
+        # up the job and query for the Submission row before it's visible in the
+        # database (a real race condition under load, not just theoretical).
+        transaction.on_commit(lambda: process_submission.delay(submission.id))
+
+    def create(self, request, *args, **kwargs):
+        # Reuse DRF's default create() logic, but respond with SubmissionSerializer
+        # (which includes id/status/files) instead of echoing back the input-only
+        # SubmissionCreateSerializer fields.
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        output_serializer = SubmissionSerializer(serializer.instance, context=self.get_serializer_context())
+        headers = self.get_success_headers(output_serializer.data)
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
-        review = generate_review(
-            title=serializer.validated_data["title"],
-            programming_language=serializer.validated_data["programming_language"],
-            code_content=serializer.validated_data["code_content"]
-        )
 
-        return Response(review.model_dump())
+class SubmissionDetailAPIView(RetrieveAPIView):
+    """GET /api/submissions/<id>/ — the status/result endpoint (Step 6). Clients poll this."""
+
+    serializer_class = SubmissionSerializer
+
+    def get_queryset(self):
+        # Scoping to request.user means requesting someone else's submission id
+        # 404s instead of 403ing — we don't want to confirm the id even exists.
+        return Submission.objects.filter(user=self.request.user).prefetch_related('files', 'review')

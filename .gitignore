@@ -11,6 +11,9 @@ __pycache__/
 # SQLite database
 db.sqlite3
 
+# User-uploaded submission files (dev MEDIA_ROOT)
+media/
+
 # IDE files
 .vscode/
 .idea/
